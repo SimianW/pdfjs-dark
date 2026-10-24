@@ -609,6 +609,38 @@ body {
   mask-image: var(--toolbarButton-editorSignature-icon);
 }
 
+#pageThemeButton::before {
+  mask-image: url(images/toolbarButton-pageTheme.svg);
+}
+
+.darkPageTheme .pdfViewer {
+  --page-bg-color: #1b1b1f;
+
+  .textLayer .highlight {
+    --highlight-bg-color: rgb(180 120 255 / 0.55);
+    --highlight-selected-bg-color: rgb(255 170 50 / 0.7);
+  }
+
+  .annotationLayer {
+    --input-hover-border-color: #8ab4f8;
+    --annotation-unfocused-field-filter: none;
+
+    .textWidgetAnnotation :is(input, textarea),
+    .choiceWidgetAnnotation select {
+      color-scheme: dark;
+      /* PDF form appearances specify inline colors. Keep editable text
+       * legible without filtering the layer (or affecting its geometry). */
+      color: #e3e3e3 !important;
+      background-color: rgb(40 40 48 / 0.9) !important;
+    }
+
+    .linkAnnotation > a:hover {
+      background-color: rgb(100 160 255 / 0.25);
+      box-shadow: 0 0 0 1px #8ab4f8;
+    }
+  }
+}
+
 #printButton::before {
   mask-image: var(--toolbarButton-print-icon);
 }

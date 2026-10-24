@@ -4,6 +4,14 @@
 
 ## Main toolbar buttons (tooltips and alt text for images)
 
+pdfjs-page-theme-auto-button =
+    .title = PDF page theme: Auto (follow system). Switch to Dark.
+pdfjs-page-theme-dark-button =
+    .title = PDF page theme: Dark. Switch to Light.
+pdfjs-page-theme-light-button =
+    .title = PDF page theme: Light. Switch to Auto.
+pdfjs-page-theme-button-label = PDF page theme
+
 pdfjs-previous-button =
     .title = Previous Page
 pdfjs-previous-button-label = Previous

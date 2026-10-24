@@ -414,6 +414,63 @@ const PDFViewerApplication = {
   /**
    * @private
    */
+  _getPageColors() {
+    if (
+      AppOptions.get("forcePageColors") ||
+      window.matchMedia("(forced-colors: active)").matches
+    ) {
+      return {
+        background: AppOptions.get("pageColorsBackground"),
+        foreground: AppOptions.get("pageColorsForeground"),
+      };
+    }
+    const theme = AppOptions.get("pageTheme");
+    return theme === 2 ||
+      (theme === 0 && window.matchMedia("(prefers-color-scheme: dark)").matches)
+      ? { dark: true, background: "#1b1b1f", foreground: "#e3e3e3" }
+      : null;
+  },
+
+  _initializePageTheme() {
+    const button = this.appConfig.toolbar?.pageThemeButton;
+    const update = () => {
+      const colors = this._getPageColors();
+      const viewer = this.pdfViewer;
+      if (JSON.stringify(colors) !== JSON.stringify(viewer.pageColors)) {
+        viewer.setPageColors(colors);
+        this.pdfThumbnailViewer?.setPageColors(colors);
+        this.forceRendering();
+      }
+      document.documentElement.classList.toggle(
+        "darkPageTheme",
+        !!colors?.dark
+      );
+      if (button) {
+        const state =
+          ["auto", "light", "dark"][AppOptions.get("pageTheme")] || "auto";
+        button.setAttribute("data-l10n-id", `pdfjs-page-theme-${state}-button`);
+        this.l10n.translateOnce(button);
+        button.dataset.pageTheme = state;
+      }
+    };
+    window
+      .matchMedia("(prefers-color-scheme: dark)")
+      .addEventListener("change", update);
+    window
+      .matchMedia("(forced-colors: active)")
+      .addEventListener("change", update);
+    button?.addEventListener("click", () => {
+      // Auto -> Dark -> Light -> Auto. Apply immediately, then persist.
+      const next = [2, 0, 1][AppOptions.get("pageTheme")] ?? 0;
+      AppOptions.set("pageTheme", next);
+      update();
+      this.preferences.set("pageTheme", next).catch(reason => {
+        console.error("Unable to save PDF page theme:", reason);
+      });
+    });
+    update();
+  },
+
   async _initializeViewerComponents() {
     const { appConfig, externalServices, l10n, mlManager } = this;
     const abortSignal = this._globalAbortController.signal;
@@ -472,15 +529,7 @@ const PDFViewerApplication = {
     const container = appConfig.mainContainer,
       viewer = appConfig.viewerContainer;
     const annotationEditorMode = AppOptions.get("annotationEditorMode");
-    const hasForcedColors =
-      AppOptions.get("forcePageColors") ||
-      window.matchMedia("(forced-colors: active)").matches;
-    const pageColors = hasForcedColors
-      ? {
-          background: AppOptions.get("pageColorsBackground"),
-          foreground: AppOptions.get("pageColorsForeground"),
-        }
-      : null;
+    const pageColors = this._getPageColors();
     const enableMerge = AppOptions.get("enableMerge");
     const enableSplitMerge = AppOptions.get("enableSplitMerge");
 
@@ -673,7 +722,7 @@ const PDFViewerApplication = {
             linkService,
             overlayManager,
             /* ltr = */ l10n.getDirection() === "ltr",
-            hasForcedColors,
+            !!pageColors && !pageColors.dark,
             abortSignal
           )
         : null;
@@ -842,6 +891,8 @@ const PDFViewerApplication = {
         );
       }
     }
+
+    this._initializePageTheme();
 
     if (appConfig.secondaryToolbar) {
       if (AppOptions.get("enableAltText") && this.imageAltTextSettings) {

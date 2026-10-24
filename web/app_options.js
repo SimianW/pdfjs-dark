@@ -313,7 +313,7 @@ const defaultOptions = new Map([
           "disableTelemetry",
           {
             /** @type {boolean} */
-            value: false,
+            value: true,
             kind: OptionKind.VIEWER + OptionKind.PREFERENCE,
           },
         ],
@@ -617,6 +617,14 @@ const defaultOptions = new Map([
     },
   ],
   [
+    "pageTheme",
+    {
+      /** @type {number} */
+      value: 0,
+      kind: OptionKind.VIEWER + OptionKind.PREFERENCE,
+    },
+  ],
+  [
     "pageColorsBackground",
     {
       /** @type {string} */
@@ -707,7 +715,7 @@ const defaultOptions = new Map([
     "viewerCssTheme",
     {
       /** @type {number} */
-      value: typeof PDFJSDev !== "undefined" && PDFJSDev.test("CHROME") ? 2 : 0,
+      value: 0,
       kind: OptionKind.VIEWER + OptionKind.PREFERENCE,
     },
   ],

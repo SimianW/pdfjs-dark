@@ -944,7 +944,7 @@ class PDFViewer {
       ? pdfDocument.getPermissions()
       : Promise.resolve();
 
-    const { eventBus, pageColors, viewer } = this;
+    const { eventBus, viewer } = this;
 
     this.#eventAC = new AbortController();
     const { signal } = this.#eventAC;
@@ -997,6 +997,7 @@ class PDFViewer {
         if (pdfDocument !== this.pdfDocument) {
           return; // The document was closed while the first page resolved.
         }
+        const { pageColors } = this;
         this._firstPageCapability.resolve(firstPdfPage);
         this._optionalContentConfigPromise = optionalContentConfigPromise;
 
@@ -1027,7 +1028,7 @@ class PDFViewer {
               this.#signatureManager,
               eventBus,
               pdfDocument,
-              pageColors,
+              pageColors?.dark ? null : pageColors,
               this.#annotationEditorHighlightColors,
               this.#enableHighlightFloatingButton,
               this.#enableUpdatedAddImage,
@@ -1059,34 +1060,7 @@ class PDFViewer {
         // see issue 15795.
         viewer.style.setProperty("--scale-factor", viewport.scale);
 
-        if (pageColors?.background) {
-          viewer.style.setProperty("--page-bg-color", pageColors.background);
-        }
-        if (
-          pageColors?.foreground === "CanvasText" ||
-          pageColors?.background === "Canvas"
-        ) {
-          viewer.style.setProperty(
-            "--hcm-highlight-filter",
-            pdfDocument.filterFactory.addHighlightHCMFilter(
-              "highlight",
-              "CanvasText",
-              "Canvas",
-              "HighlightText",
-              "Highlight"
-            )
-          );
-          viewer.style.setProperty(
-            "--hcm-highlight-selected-filter",
-            pdfDocument.filterFactory.addHighlightHCMFilter(
-              "highlight_selected",
-              "CanvasText",
-              "Canvas",
-              "HighlightText",
-              "ButtonText"
-            )
-          );
-        }
+        this.#setPageColorsStyles();
 
         for (let pageNum = 1; pageNum <= pagesCount; ++pageNum) {
           const pageView = new PDFPageView({
@@ -2791,6 +2765,53 @@ class PDFViewer {
       }
     }
     updater();
+  }
+
+  #setPageColorsStyles() {
+    const { viewer, pageColors, pdfDocument } = this;
+    viewer.style.setProperty(
+      "--page-bg-color",
+      pageColors?.background || "#ffffff"
+    );
+    const hasHCM =
+      pageColors?.foreground === "CanvasText" ||
+      pageColors?.background === "Canvas";
+    for (const [name, background] of [
+      ["highlight", "Highlight"],
+      ["highlight_selected", "ButtonText"],
+    ]) {
+      const property = `--hcm-${name.replaceAll("_", "-")}-filter`;
+      if (hasHCM && pdfDocument) {
+        viewer.style.setProperty(
+          property,
+          pdfDocument.filterFactory.addHighlightHCMFilter(
+            name,
+            "CanvasText",
+            "Canvas",
+            "HighlightText",
+            background
+          )
+        );
+      } else {
+        viewer.style.removeProperty(property);
+      }
+    }
+  }
+
+  setPageColors(pageColors) {
+    this.pageColors = pageColors;
+    this.#setPageColorsStyles();
+    for (const pageView of this._pages) {
+      pageView.pageColors = pageColors;
+      // Recreate selection/detail layers; form values and editor data stay
+      // in annotationStorage/the editor UI manager across layer rebuilds.
+      pageView.reset({
+        keepAnnotationLayer: true,
+        keepAnnotationEditorLayer: true,
+        keepXfaLayer: true,
+      });
+    }
+    this.update();
   }
 
   refresh(noUpdate = false, updateArgs = Object.create(null)) {

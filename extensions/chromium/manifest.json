@@ -1,9 +1,9 @@
 {
   "minimum_chrome_version": "103",
   "manifest_version": 3,
-  "name": "PDF Viewer",
+  "name": "PDF Viewer Dark",
   "version": "PDFJSSCRIPT_VERSION",
-  "description": "Uses HTML5 to display PDF files directly in the browser.",
+  "description": "PDF.js with automatic, hue-preserving dark PDF pages. Photos retain their colors; printing stays original.",
   "icons": {
     "128": "icon128.png",
     "48": "icon48.png",

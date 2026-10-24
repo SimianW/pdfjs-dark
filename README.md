@@ -1,3 +1,44 @@
+# PDF Viewer Dark
+
+An independent fork of Mozilla PDF.js (v6.4.299) with automatic, colored dark
+PDF pages for Chrome. Not an official Mozilla extension. Telemetry is disabled
+by default; the upstream license below and `LICENSE` are unchanged.
+
+## Install and update
+
+1. Download `pdfjs-dark-chromium.zip` from this fork's release, and unzip it into
+   a permanent folder (do not delete that folder after installation).
+2. Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,
+   and select the unzipped folder containing `manifest.json`.
+3. Disable the original **PDF Viewer** extension so the two viewers do not fight
+   over PDFs. Enable **Allow access to file URLs** on this extension's details
+   page if you also open local PDFs.
+
+To update, replace the contents of that same folder with the new release, click
+**Reload** for PDF Viewer Dark in `chrome://extensions`, and reopen PDF tabs.
+Unpacked extensions do not auto-update. To build locally: `npm ci`, then
+`npx gulp chromium`; load `build/chromium/`. The build also produces
+`build/pdfjs-dark-chromium.zip`.
+
+## Page colors
+
+The half-circle toolbar button cycles **Auto → Dark → Light** and saves your
+choice. **PDF page theme** in extension options (`pageTheme`) is `0` = follow
+system (default), `1` = always light, `2` = always dark. Auto reacts live to OS
+appearance changes. The toolbar UI independently follows the system by default.
+
+Visible vector colors, gradient stops, patterns and stencils use perceptual
+OKLab lightness inversion, preserving hue and reducing chroma only to fit sRGB.
+Paper becomes dark gray and text soft light gray. Raster images with mostly
+near-white, low-saturation paper are transformed with a fast interpolated color
+lookup table; photos keep their original colors. Image classification is a
+heuristic: white-background photos or unusually dark/colorful scans can require
+switching to Light. Selection, search and form overlays remain usable. OS
+forced-colors/high contrast takes priority, and **printing always uses original
+colors**, regardless of the page theme.
+
+---
+
 # PDF.js [![CI](https://github.com/mozilla/pdf.js/actions/workflows/ci.yml/badge.svg?query=branch%3Amaster)](https://github.com/mozilla/pdf.js/actions/workflows/ci.yml?query=branch%3Amaster) [![codecov](https://codecov.io/gh/mozilla/pdf.js/branch/master/graph/badge.svg)](https://codecov.io/gh/mozilla/pdf.js) [![Reference images](https://img.shields.io/endpoint?url=https%3A%2F%2Fmozilla.github.io%2Fpdf.js.refs%2Fmakeref-badge.json)](https://github.com/mozilla/pdf.js.refs/commits/main)
 
 [PDF.js](https://mozilla.github.io/pdf.js/) is a Portable Document Format (PDF) viewer that is built with HTML5.

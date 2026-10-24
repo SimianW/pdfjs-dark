@@ -285,7 +285,7 @@ class PDFPageView extends BasePDFPageView {
     const clone = new PDFPageView({
       container: null,
       eventBus: this.eventBus,
-      pagesColors: this.pageColors,
+      pageColors: this.pageColors,
       renderingQueue: this.renderingQueue,
       enableOptimizedPartialRendering: this.enableOptimizedPartialRendering,
       minDurationToUpdateCanvas: this.minDurationToUpdateCanvas,

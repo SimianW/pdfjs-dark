@@ -500,6 +500,14 @@ class PDFThumbnailViewer {
     }
   }
 
+  setPageColors(pageColors) {
+    this.pageColors = pageColors;
+    for (const thumbnail of this._thumbnails) {
+      thumbnail.pageColors = pageColors;
+      thumbnail.reset();
+    }
+  }
+
   cleanup() {
     for (const thumbnail of this._thumbnails) {
       if (thumbnail.renderingState !== RenderingStates.FINISHED) {

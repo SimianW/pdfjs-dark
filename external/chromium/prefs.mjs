@@ -93,6 +93,12 @@ const prefsMetadata = {
     description:
       "When enabled it will maintain the currently active zoom level, rather than letting the PDF document modify it, when navigating to internal destinations.",
   },
+  pageTheme: {
+    title: "PDF page theme",
+    description:
+      "Page content colors: 0 = Follow system, 1 = Always light, 2 = Always dark. Printing always uses original colors. High contrast takes precedence.",
+    enum: [0, 1, 2],
+  },
   pageColorsBackground: {
     description:
       "The color is a string as defined in CSS. Its goal is to help improve readability in high contrast mode",

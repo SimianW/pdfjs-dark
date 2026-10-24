@@ -2213,6 +2213,12 @@ gulp.task(
     },
     async function prefsSchemaChromium() {
       return writeToDirectory(await createChromiumPrefsSchema(), CHROMIUM_DIR);
+    },
+    function zipChromiumDark() {
+      return gulp
+        .src(CHROMIUM_DIR + "**/*", { base: CHROMIUM_DIR, encoding: false })
+        .pipe(zip("pdfjs-dark-chromium.zip"))
+        .pipe(gulp.dest(BUILD_DIR));
     }
   )
 );

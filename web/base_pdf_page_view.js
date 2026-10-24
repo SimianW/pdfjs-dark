@@ -111,7 +111,8 @@ class BasePDFPageView extends RenderableView {
 
   _createCanvas(onShow, hideUntilComplete = false) {
     const { pageColors } = this;
-    const hasHCM = !!(pageColors?.background && pageColors?.foreground);
+    const hasHCM =
+      !pageColors?.dark && !!(pageColors?.background && pageColors?.foreground);
     const prevCanvas = this.canvas;
 
     // In HCM, a final filter is applied on the canvas which means that
