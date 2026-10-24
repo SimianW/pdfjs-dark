@@ -1241,7 +1241,8 @@ class PDFDocumentProxy {
  *   `pageColors`-option is used.
  * @property {object} [pageColors] - Overwrites background and foreground colors
  *   with user defined ones in order to improve readability in high contrast
- *   mode.
+ *   mode. With `dark: true`, instead use hue-preserving perceptual dark colors
+ *   and classify raster images. Dark appearance is ignored for print intent.
  * @property {Promise<OptionalContentConfig>} [optionalContentConfigPromise] -
  *   A promise that should resolve with an {@link OptionalContentConfig}
  *   created from `PDFDocumentProxy.getOptionalContentConfig`. If `null`,
@@ -1499,6 +1500,11 @@ class PDFPageProxy {
     operationsFilter = null,
   }) {
     this._stats?.time("Overall");
+
+    // Page appearance is a screen-only accessibility preference, never ink.
+    if (intent === "print" && pageColors?.dark) {
+      pageColors = null;
+    }
 
     const intentArgs = this._transport.getRenderingIntent(
       intent,

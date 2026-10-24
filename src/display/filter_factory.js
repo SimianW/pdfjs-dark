@@ -335,9 +335,13 @@ class DOMFilterFactory extends BaseFilterFactory {
    * @returns {Record<string, string> | null}
    */
   createSelectionStyle(pageColors = null) {
-    const filter = pageColors
-      ? this.addSelectionHCMFilter(pageColors.foreground, pageColors.background)
-      : this.addSelectionFilter();
+    const filter =
+      pageColors && !pageColors.dark
+        ? this.addSelectionHCMFilter(
+            pageColors.foreground,
+            pageColors.background
+          )
+        : this.addSelectionFilter();
 
     // Safari does not supported SVG filters in `backdrop-filter`:
     // <https://bugs.webkit.org/show_bug.cgi?id=245510>.

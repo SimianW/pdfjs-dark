@@ -20,6 +20,7 @@ import {
   unreachable,
   Util,
 } from "../shared/util.js";
+import { darkenColor, darkenRGB } from "./page_theme.js";
 import { drawMeshWithGPU, isGPUReady, loadMeshShader } from "./webgpu.js";
 import { CanvasNestedDependencyTracker } from "./canvas_dependency_tracker.js";
 import { getCurrentTransform } from "./display_utils.js";
@@ -557,7 +558,20 @@ class DummyShadingPattern extends BaseShadingPattern {
   }
 }
 
-function getShadingPattern(IR) {
+function getShadingPattern(IR, dark = false) {
+  if (dark) {
+    // Never mutate shared worker data: light views and printing reuse it.
+    IR = IR.slice();
+    if (IR[0] === "RadialAxial") {
+      IR[3] = IR[3].map(([offset, color]) => [offset, darkenColor(color)]);
+    } else if (IR[0] === "Mesh") {
+      const colors = (IR[3] = IR[3].slice());
+      for (let i = 0; i < colors.length; i += 4) {
+        colors.set(darkenRGB(colors[i], colors[i + 1], colors[i + 2]), i);
+      }
+      IR[7] &&= darkenRGB(...IR[7]);
+    }
+  }
   switch (IR[0]) {
     case "RadialAxial":
       return new RadialAxialShadingPattern(IR);
@@ -949,8 +963,9 @@ class TilingPattern {
     const { ctx, current } = graphics;
     current.patternFill = current.patternStroke = false;
     // Pre-transfer solid colors in fallback mode.
-    ctx.fillStyle = ctx.strokeStyle =
-      current.transferMapsFallback?.applyToColor(color) ?? color;
+    ctx.fillStyle = ctx.strokeStyle = graphics.themeColor(
+      current.transferMapsFallback?.applyToColor(color) ?? color
+    );
     // Also needed by image masks (fixes issues 3226 and 8741).
     current.fillColor = current.strokeColor = color;
   }

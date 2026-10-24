@@ -22,6 +22,11 @@ import {
   convertRGBToRGBA,
 } from "../shared/image_utils.js";
 import {
+  darkenColor,
+  isDocumentImage,
+  transformDocumentImage,
+} from "./page_theme.js";
+import {
   F32_BBOX_INIT,
   FeatureTest,
   FONT_IDENTITY_MATRIX,
@@ -656,6 +661,8 @@ class CanvasGraphics {
     this.outputScaleX = 1;
     this.outputScaleY = 1;
     this.pageColors = pageColors;
+    this.themeMaskDepth = 0;
+    this.themeImageKinds = new WeakMap();
 
     this._cachedScaleForStroking = [-1, 0];
     this._cachedBitmapsMap = new Map();
@@ -689,7 +696,7 @@ class CanvasGraphics {
     const height = this.ctx.canvas.height;
 
     const savedFillStyle = this.ctx.fillStyle;
-    this.ctx.fillStyle = background || "#ffffff";
+    this.ctx.fillStyle = this.themeColor(background || "#ffffff");
     this.ctx.fillRect(0, 0, width, height);
     this.ctx.fillStyle = savedFillStyle;
 
@@ -706,7 +713,7 @@ class CanvasGraphics {
     }
 
     this.ctx.save();
-    resetCtxToDefault(this.ctx);
+    this.resetContext();
     if (transform) {
       this.ctx.transform(...transform);
       this.outputScaleX = transform[0];
@@ -877,7 +884,7 @@ class CanvasGraphics {
   }
 
   #drawFilter() {
-    if (this.pageColors) {
+    if (this.pageColors && !this.pageColors.dark) {
       const hcmFilterId = this.filterFactory.addHCMFilter(
         this.pageColors.foreground,
         this.pageColors.background
@@ -3106,7 +3113,7 @@ class CanvasGraphics {
               markedContentStack: this.markedContentStack,
             },
             undefined,
-            undefined,
+            this.isDarkTheme ? this.pageColors : null,
             this.dependencyTracker
               ? new CanvasNestedDependencyTracker(
                   this.dependencyTracker,
@@ -3145,8 +3152,23 @@ class CanvasGraphics {
       pattern instanceof TilingPattern ? [0, 0, 0, 0] : null;
   }
 
+  get isDarkTheme() {
+    return this.pageColors?.dark && !this.themeMaskDepth;
+  }
+
+  themeColor(color) {
+    return this.isDarkTheme ? darkenColor(color) : color;
+  }
+
+  resetContext() {
+    resetCtxToDefault(this.ctx);
+    this.ctx.fillStyle = this.ctx.strokeStyle = this.themeColor("#000000");
+  }
+
   #transferColor(color) {
-    return this.current.transferMapsFallback?.applyToColor(color) ?? color;
+    return this.themeColor(
+      this.current.transferMapsFallback?.applyToColor(color) ?? color
+    );
   }
 
   setStrokeRGBColor(opIdx, color) {
@@ -3178,8 +3200,9 @@ class CanvasGraphics {
   }
 
   _getPattern(opIdx, objId, matrix = null) {
-    const pattern = this.cachedPatterns.getOrInsertComputed(objId, () =>
-      getShadingPattern(this.getObject(opIdx, objId))
+    const pattern = this.cachedPatterns.getOrInsertComputed(
+      `${objId}_${!!this.isDarkTheme}`,
+      () => getShadingPattern(this.getObject(opIdx, objId), this.isDarkTheme)
     );
     if (matrix) {
       pattern.matrix = matrix;
@@ -3513,6 +3536,16 @@ class CanvasGraphics {
     // except the blend mode, soft mask, and alpha constants.
     copyCtxState(currentCtx, groupCtx);
     this.ctx = groupCtx;
+    if (group.smask) {
+      // Luminosity/alpha mask samples are data, not visible page colors.
+      this.themeMaskDepth++;
+      if (!this.current.patternFill) {
+        groupCtx.fillStyle = this.current.fillColor;
+      }
+      if (!this.current.patternStroke) {
+        groupCtx.strokeStyle = this.current.strokeColor;
+      }
+    }
     this.dependencyTracker
       ?.inheritSimpleDataAsFutureForcedDependencies([
         "fillAlpha",
@@ -3576,6 +3609,7 @@ class CanvasGraphics {
     this.dependencyTracker?.popBaseTransform();
 
     if (group.smask) {
+      this.themeMaskDepth--;
       this.tempSMask = this.smaskStack.pop();
       this.restore(opIdx);
       if (this.dependencyTracker) {
@@ -3773,7 +3807,7 @@ class CanvasGraphics {
     // a clipping path, whatever...
     // So in order to have something clean, we restore the initial state.
     this.#restoreInitialState();
-    resetCtxToDefault(this.ctx);
+    this.resetContext();
 
     this.ctx.save();
     this.save(opIdx);
@@ -3829,9 +3863,9 @@ class CanvasGraphics {
         this.ctx.save();
         this.ctx.setTransform(XY[0], 0, 0, -XY[1], 0, height * XY[1]);
 
-        resetCtxToDefault(this.ctx);
+        this.resetContext();
       } else {
-        resetCtxToDefault(this.ctx);
+        this.resetContext();
 
         // Consume a potential path before clipping.
         this.endPath(opIdx);
@@ -4080,6 +4114,39 @@ class CanvasGraphics {
     return ctx.canvas;
   }
 
+  themeImage(img, canvasEntry, imgData) {
+    const { width, height } = imgData;
+    let isDocument = this.themeImageKinds.get(imgData);
+    if (isDocument === undefined) {
+      // Read back only a tiny sample for photos, not their full-resolution
+      // bitmap. The decode and GPU upload fast paths stay intact.
+      const sample = this.canvasFactory.create(
+        Math.min(width, 64),
+        Math.min(height, 64)
+      );
+      const { context, canvas } = sample;
+      context.drawImage(img, 0, 0, canvas.width, canvas.height);
+      isDocument = isDocumentImage(
+        context.getImageData(0, 0, canvas.width, canvas.height)
+      );
+      this.canvasFactory.destroy(sample);
+      this.themeImageKinds.set(imgData, isDocument);
+    }
+    if (isDocument) {
+      if (!canvasEntry) {
+        canvasEntry = this.canvasFactory.create(width, height);
+        canvasEntry.context.drawImage(img, 0, 0);
+      }
+      const ctx = canvasEntry.context;
+      const pixels = ctx.getImageData(0, 0, width, height);
+      transformDocumentImage(pixels);
+      ctx.putImageData(pixels, 0, 0);
+      img = canvasEntry.canvas;
+    }
+    // Photographs intentionally retain their original colors and luminance.
+    return { img, canvasEntry };
+  }
+
   applyTransferMapsToBitmap(imgData) {
     const { transferMaps, transferMapsFallback } = this.current;
     if (transferMaps === "none" && !transferMapsFallback) {
@@ -4132,6 +4199,13 @@ class CanvasGraphics {
       inlineImgCanvas = tmpCanvas;
     }
 
+    if (this.isDarkTheme) {
+      ({ img: imgToPaint, canvasEntry: inlineImgCanvas } = this.themeImage(
+        imgToPaint,
+        inlineImgCanvas,
+        imgData
+      ));
+    }
     const scaled = this._scaleImage(
       imgToPaint,
       getCurrentTransformInverse(ctx)
@@ -4202,6 +4276,13 @@ class CanvasGraphics {
       inlineImgCanvas = tmpCanvas;
     }
 
+    if (this.isDarkTheme) {
+      ({ img: imgToPaint, canvasEntry: inlineImgCanvas } = this.themeImage(
+        imgToPaint,
+        inlineImgCanvas,
+        imgData
+      ));
+    }
     this.dependencyTracker?.resetBBox(opIdx);
 
     for (const entry of map) {
