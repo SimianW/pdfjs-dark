@@ -22,8 +22,10 @@ import {
   convertRGBToRGBA,
 } from "../shared/image_utils.js";
 import {
+  darkBlendMode,
   darkenColor,
   isDocumentImage,
+  themeImageCache,
   transformDocumentImage,
 } from "./page_theme.js";
 import {
@@ -695,6 +697,10 @@ class CanvasGraphics {
     const width = this.ctx.canvas.width;
     const height = this.ctx.canvas.height;
 
+    if (!this.pageColors?.dark) {
+      // Light or printed pages won't reuse recolored images soon.
+      themeImageCache.clear();
+    }
     const savedFillStyle = this.ctx.fillStyle;
     this.ctx.fillStyle = this.themeColor(background || "#ffffff");
     this.ctx.fillRect(0, 0, width, height);
@@ -1249,7 +1255,9 @@ class CanvasGraphics {
             "globalCompositeOperation",
             opIdx
           );
-          this.ctx.globalCompositeOperation = value;
+          this.ctx.globalCompositeOperation = this.isDarkTheme
+            ? darkBlendMode(value)
+            : value;
           break;
         case "SMask":
           this.dependencyTracker?.recordSimpleData("SMask", opIdx);
@@ -4114,9 +4122,43 @@ class CanvasGraphics {
     return ctx.canvas;
   }
 
+  /**
+   * Photographs keep the document's blend mode, so swap the dark-mapped mode
+   * back wherever it is applied: the drawing context, the soft-mask composite
+   * and the knockout composite. Call the returned function once the image has
+   * been composited and the knockout element has ended.
+   */
+  #useDocumentBlendMode() {
+    const smask = this.current.activeSMask;
+    const smaskMode = smask?.blendMode;
+    const mode = this.#knockoutSavedGCO ?? this.ctx.globalCompositeOperation;
+    this.ctx.globalCompositeOperation = darkBlendMode(
+      this.ctx.globalCompositeOperation
+    );
+    if (smaskMode) {
+      smask.blendMode = darkBlendMode(smaskMode);
+    }
+    if (this.#knockoutSavedGCO !== null) {
+      this.#knockoutSavedGCO = darkBlendMode(this.#knockoutSavedGCO);
+    }
+    return () => {
+      if (smaskMode) {
+        smask.blendMode = smaskMode;
+      }
+      // #endKnockoutElement copies its saved mode back to the group canvas.
+      this.ctx.globalCompositeOperation = mode;
+    };
+  }
+
   themeImage(img, canvasEntry, imgData) {
     const { width, height } = imgData;
-    let isDocument = this.themeImageKinds.get(imgData);
+    // Transfer functions vary per graphics state, so only share plain images.
+    const shared =
+      this.current.transferMaps === "none" &&
+      !this.current.transferMapsFallback;
+    let isDocument = shared
+      ? themeImageCache.getKind(imgData)
+      : this.themeImageKinds.get(imgData);
     if (isDocument === undefined) {
       // Read back only a tiny sample for photos, not their full-resolution
       // bitmap. The decode and GPU upload fast paths stay intact.
@@ -4130,20 +4172,39 @@ class CanvasGraphics {
         context.getImageData(0, 0, canvas.width, canvas.height)
       );
       this.canvasFactory.destroy(sample);
-      this.themeImageKinds.set(imgData, isDocument);
-    }
-    if (isDocument) {
-      if (!canvasEntry) {
-        canvasEntry = this.canvasFactory.create(width, height);
-        canvasEntry.context.drawImage(img, 0, 0);
+      if (shared) {
+        themeImageCache.setKind(imgData, isDocument);
+      } else {
+        this.themeImageKinds.set(imgData, isDocument);
       }
-      const ctx = canvasEntry.context;
-      const pixels = ctx.getImageData(0, 0, width, height);
-      transformDocumentImage(pixels);
-      ctx.putImageData(pixels, 0, 0);
-      img = canvasEntry.canvas;
     }
-    // Photographs intentionally retain their original colors and luminance.
+    if (!isDocument) {
+      // Photographs intentionally retain their original colors and luminance.
+      return { img, canvasEntry, isPhoto: true };
+    }
+    const cached = shared && themeImageCache.get(imgData);
+    if (cached) {
+      if (canvasEntry) {
+        this.canvasFactory.destroy(canvasEntry);
+      }
+      return { img: cached, canvasEntry: null };
+    }
+    if (!canvasEntry) {
+      canvasEntry = this.canvasFactory.create(width, height);
+      canvasEntry.context.drawImage(img, 0, 0);
+    }
+    const ctx = canvasEntry.context;
+    const pixels = ctx.getImageData(0, 0, width, height);
+    transformDocumentImage(pixels);
+    ctx.putImageData(pixels, 0, 0);
+    img = canvasEntry.canvas;
+    // The cache now owns the canvas, so the caller mustn't destroy it.
+    if (
+      shared &&
+      themeImageCache.set(imgData, canvasEntry, this.canvasFactory)
+    ) {
+      canvasEntry = null;
+    }
     return { img, canvasEntry };
   }
 
@@ -4199,12 +4260,17 @@ class CanvasGraphics {
       inlineImgCanvas = tmpCanvas;
     }
 
+    let restoreBlendMode = null;
     if (this.isDarkTheme) {
-      ({ img: imgToPaint, canvasEntry: inlineImgCanvas } = this.themeImage(
-        imgToPaint,
-        inlineImgCanvas,
-        imgData
-      ));
+      let isPhoto;
+      ({
+        img: imgToPaint,
+        canvasEntry: inlineImgCanvas,
+        isPhoto,
+      } = this.themeImage(imgToPaint, inlineImgCanvas, imgData));
+      if (isPhoto) {
+        restoreBlendMode = this.#useDocumentBlendMode();
+      }
     }
     const scaled = this._scaleImage(
       imgToPaint,
@@ -4250,6 +4316,7 @@ class CanvasGraphics {
     this.compose();
     this.restore(opIdx);
     this.#endKnockoutElement(started);
+    restoreBlendMode?.();
   }
 
   paintInlineImageXObjectGroup(opIdx, imgData, map) {
@@ -4276,12 +4343,17 @@ class CanvasGraphics {
       inlineImgCanvas = tmpCanvas;
     }
 
+    let restoreBlendMode = null;
     if (this.isDarkTheme) {
-      ({ img: imgToPaint, canvasEntry: inlineImgCanvas } = this.themeImage(
-        imgToPaint,
-        inlineImgCanvas,
-        imgData
-      ));
+      let isPhoto;
+      ({
+        img: imgToPaint,
+        canvasEntry: inlineImgCanvas,
+        isPhoto,
+      } = this.themeImage(imgToPaint, inlineImgCanvas, imgData));
+      if (isPhoto) {
+        restoreBlendMode = this.#useDocumentBlendMode();
+      }
     }
     this.dependencyTracker?.resetBBox(opIdx);
 
@@ -4310,6 +4382,7 @@ class CanvasGraphics {
     this.dependencyTracker?.recordOperation(opIdx);
     this.compose();
     this.#endKnockoutElement(started);
+    restoreBlendMode?.();
   }
 
   paintSolidColorImageMask(opIdx) {
