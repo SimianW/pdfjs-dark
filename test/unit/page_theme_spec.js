@@ -224,6 +224,84 @@ describe("page theme", function () {
 
   it("keeps the document's blend mode for photographs only", function () {
     const factory = createFactory();
+    const photo = factory.create(16, 16);
+    for (let x = 0; x < 16; x++) {
+      photo.context.fillStyle = `hsl(${x * 22} 80% 50%)`;
+      photo.context.fillRect(x, 0, 1, 16);
+    }
+    const scan = factory.create(16, 16);
+    scan.context.fillStyle = "#ffffff";
+    scan.context.fillRect(0, 0, 16, 16);
+    const mask = factory.create(16, 16);
+    mask.context.fillStyle = "#ffffff";
+    mask.context.fillRect(0, 0, 16, 16);
+    const group = {
+      isolated: false,
+      knockout: true,
+      bbox: [0, 0, 16, 16],
+      needsIsolation: true,
+    };
+
+    // Multiply a photograph over gray, directly, under an opaque soft mask,
+    // or inside a knockout group; then check the blend mode left behind.
+    const paint = (pageColors, setup) => {
+      const target = factory.create(16, 16);
+      target.context.fillStyle = "#808080";
+      target.context.fillRect(0, 0, 16, 16);
+      const graphics = new CanvasGraphics(
+        target.context,
+        null,
+        null,
+        factory,
+        { addFilter: () => "none" },
+        {},
+        null,
+        pageColors
+      );
+      if (setup === "knockout") {
+        graphics.beginGroup(0, group);
+      }
+      graphics.setGState(0, [["BM", "multiply"]]);
+      if (setup === "smask") {
+        graphics.tempSMask = {
+          canvas: mask.canvas,
+          context: mask.context,
+          offsetX: 0,
+          offsetY: 0,
+          subtype: "Alpha",
+        };
+        graphics.setGState(0, [["SMask", true]]);
+      }
+      graphics.ctx.setTransform(16, 0, 0, 16, 0, 0);
+      const modes = () => [
+        graphics.ctx.globalCompositeOperation,
+        graphics.current.activeSMask?.blendMode,
+      ];
+      const before = modes();
+      graphics.paintInlineImageXObject(0, {
+        width: 16,
+        height: 16,
+        bitmap: photo.canvas,
+      });
+      const after = modes();
+      if (setup === "knockout") {
+        graphics.endGroup(0, group);
+      }
+      const pixel = Array.from(target.context.getImageData(4, 8, 1, 1).data);
+      factory.destroy(target);
+      return { pixel, before, after };
+    };
+
+    const authored = paint(null).pixel;
+    for (const setup of ["plain", "smask", "knockout"]) {
+      const { pixel, before, after } = paint({ dark: true }, setup);
+      // Not recolored, so it blends as authored.
+      expect(pixel).withContext(setup).toEqual(authored);
+      // Recolored content drawn next still uses the dark-mapped mode.
+      expect(after).withContext(setup).toEqual(before);
+      expect(before).withContext(setup).toContain("screen");
+    }
+
     const target = factory.create(1, 1);
     const graphics = new CanvasGraphics(
       target.context,
@@ -235,31 +313,21 @@ describe("page theme", function () {
       null,
       { dark: true }
     );
-    graphics.setGState(0, [["BM", "multiply"]]);
-    const photo = factory.create(16, 16);
-    for (let x = 0; x < 16; x++) {
-      photo.context.fillStyle = `hsl(${x * 22} 80% 50%)`;
-      photo.context.fillRect(x, 0, 1, 16);
-    }
-    graphics.themeImage(photo.canvas, null, { width: 16, height: 16 });
-    // Not recolored, so it blends as authored.
-    expect(target.context.globalCompositeOperation).toEqual("multiply");
-
-    graphics.setGState(0, [["BM", "multiply"]]);
-    const scan = factory.create(16, 16);
-    scan.context.fillStyle = "#ffffff";
-    scan.context.fillRect(0, 0, 16, 16);
-    const { canvasEntry } = graphics.themeImage(scan.canvas, null, {
+    expect(
+      graphics.themeImage(photo.canvas, null, { width: 16, height: 16 }).isPhoto
+    ).toBeTrue();
+    const { canvasEntry, isPhoto } = graphics.themeImage(scan.canvas, null, {
       width: 16,
       height: 16,
     });
-    expect(target.context.globalCompositeOperation).toEqual("screen");
+    expect(isPhoto).toBeUndefined();
     if (canvasEntry) {
       factory.destroy(canvasEntry);
     }
+    factory.destroy(target);
+    factory.destroy(mask);
     factory.destroy(scan);
     factory.destroy(photo);
-    factory.destroy(target);
   });
 
   it("produces finite integer sRGB values throughout the gamut", function () {
