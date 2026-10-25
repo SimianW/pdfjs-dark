@@ -47,6 +47,30 @@ function labToLinear(L, a, b) {
   ];
 }
 
+const PAPER_L = 0.226,
+  INK_L = 0.917;
+// Knots [inverted lightness, lightness of a saturated color], strictly
+// increasing so that shades stay distinct and ordered. Light fills (yellow,
+// cyan, pastels) are lifted off the paper so that their hue shows, but kept
+// dark enough for inverted ink on them to keep >= 4.5:1. Past the knee, darker
+// originals (red, blue, green text and lines) are lifted for legibility.
+const CHROMA_CURVE = [
+  [PAPER_L, 0.4],
+  [0.39, 0.46],
+  [0.45, 0.62],
+  [INK_L, INK_L],
+];
+
+function chromaticLightness(L) {
+  let i = 1;
+  while (i < CHROMA_CURVE.length - 1 && L > CHROMA_CURVE[i][0]) {
+    i++;
+  }
+  const [x0, y0] = CHROMA_CURVE[i - 1],
+    [x1, y1] = CHROMA_CURVE[i];
+  return y0 + ((y1 - y0) * (L - x0)) / (x1 - x0);
+}
+
 /** Invert perceptual lightness, retaining OKLCH hue, not RGB complements. */
 function darkenRGB(r, g, b) {
   const key = (r << 16) | (g << 8) | b;
@@ -58,11 +82,11 @@ function darkenRGB(r, g, b) {
   let [L, , labB] = lab;
   const a = lab[1];
   const chroma = Math.hypot(a, labB);
-  // Paper/text endpoints are approximately #1b1b1f / #e3e3e3. Colored
-  // strokes need a lightness floor to stay legible on the dark paper.
-  L = Math.max(0.226 + 0.691 * (1 - L), 0.68 * Math.min(chroma / 0.08, 1));
+  // Paper/text endpoints are approximately #1b1b1f / #e3e3e3.
+  L = PAPER_L + (INK_L - PAPER_L) * (1 - L);
+  L += Math.min(chroma / 0.08, 1) * (chromaticLightness(L) - L);
   if (chroma < 0.002) {
-    labB -= 0.008 * (1 - (L - 0.226) / 0.691);
+    labB -= 0.008 * (1 - (L - PAPER_L) / (INK_L - PAPER_L));
   }
   // Gamut mapping reduces chroma along a constant-hue ray, rather than
   // independently clipping channels (which rotates saturated blues/purples).
@@ -115,6 +139,21 @@ function darkenColor(color) {
   }
   cssCache.set(color, result);
   return result;
+}
+
+// Inverting lightness swaps darkening and lightening blends: multiply over
+// white paper tints like screen over dark paper (e.g. text highlights).
+const DARK_BLEND_MODES = new Map([
+  ["multiply", "screen"],
+  ["screen", "multiply"],
+  ["darken", "lighten"],
+  ["lighten", "darken"],
+  ["color-burn", "color-dodge"],
+  ["color-dodge", "color-burn"],
+]);
+
+function darkBlendMode(mode) {
+  return DARK_BLEND_MODES.get(mode) ?? mode;
 }
 
 /** Bounded, evenly spaced sample; transparent pixels aren't paper. */
@@ -231,10 +270,96 @@ function transformDocumentImage({ data }) {
   }
 }
 
+/**
+ * Classification and recolored canvases of document images, shared by every
+ * render of the same image object: zoom steps, detail views and thumbnails.
+ * Keys are the page/common image objects, so entries go away with page
+ * cleanup; the canvases are also bounded in total area, least recently used
+ * first.
+ */
+class ThemeImageCache {
+  static MAX_PIXELS = 2 ** 25; // 128 MiB of RGBA.
+
+  #kinds = new WeakMap();
+
+  #images = new WeakMap();
+
+  #lru = new Set();
+
+  #pixels = 0;
+
+  // Release canvases once their image is collected, not only on eviction.
+  #registry = new FinalizationRegistry(entry => this.#release(entry));
+
+  getKind(key) {
+    return this.#kinds.get(key);
+  }
+
+  setKind(key, isDocument) {
+    this.#kinds.set(key, isDocument);
+  }
+
+  get(key) {
+    const entry = this.#images.get(key);
+    if (!entry) {
+      return null;
+    }
+    this.#lru.delete(entry);
+    this.#lru.add(entry);
+    return entry.canvasEntry.canvas;
+  }
+
+  /** Takes ownership of `canvasEntry` and returns true, if it fits. */
+  set(key, canvasEntry, canvasFactory) {
+    const { width, height } = canvasEntry.canvas;
+    const pixels = width * height;
+    if (pixels > ThemeImageCache.MAX_PIXELS / 2) {
+      return false;
+    }
+    for (const entry of this.#lru) {
+      if (this.#pixels + pixels <= ThemeImageCache.MAX_PIXELS) {
+        break;
+      }
+      this.#release(entry);
+    }
+    const entry = { canvasEntry, canvasFactory, pixels, key: new WeakRef(key) };
+    this.#images.set(key, entry);
+    this.#lru.add(entry);
+    this.#pixels += pixels;
+    this.#registry.register(key, entry, entry);
+    return true;
+  }
+
+  #release(entry) {
+    if (!this.#lru.delete(entry)) {
+      return;
+    }
+    this.#pixels -= entry.pixels;
+    this.#registry.unregister(entry);
+    const key = entry.key.deref();
+    if (key) {
+      this.#images.delete(key);
+    }
+    entry.canvasFactory.destroy(entry.canvasEntry);
+  }
+
+  /** The appearance changed (e.g. a light render): free all canvases. */
+  clear() {
+    for (const entry of this.#lru) {
+      this.#release(entry);
+    }
+  }
+}
+
+const themeImageCache = new ThemeImageCache();
+
 export {
+  darkBlendMode,
   darkenColor,
   darkenRGB,
   isDocumentImage,
   rgbToOKLab,
+  ThemeImageCache,
+  themeImageCache,
   transformDocumentImage,
 };

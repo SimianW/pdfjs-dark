@@ -22,8 +22,10 @@ import {
   convertRGBToRGBA,
 } from "../shared/image_utils.js";
 import {
+  darkBlendMode,
   darkenColor,
   isDocumentImage,
+  themeImageCache,
   transformDocumentImage,
 } from "./page_theme.js";
 import {
@@ -695,6 +697,10 @@ class CanvasGraphics {
     const width = this.ctx.canvas.width;
     const height = this.ctx.canvas.height;
 
+    if (!this.pageColors?.dark) {
+      // Light or printed pages won't reuse recolored images soon.
+      themeImageCache.clear();
+    }
     const savedFillStyle = this.ctx.fillStyle;
     this.ctx.fillStyle = this.themeColor(background || "#ffffff");
     this.ctx.fillRect(0, 0, width, height);
@@ -1249,7 +1255,9 @@ class CanvasGraphics {
             "globalCompositeOperation",
             opIdx
           );
-          this.ctx.globalCompositeOperation = value;
+          this.ctx.globalCompositeOperation = this.isDarkTheme
+            ? darkBlendMode(value)
+            : value;
           break;
         case "SMask":
           this.dependencyTracker?.recordSimpleData("SMask", opIdx);
@@ -4116,7 +4124,13 @@ class CanvasGraphics {
 
   themeImage(img, canvasEntry, imgData) {
     const { width, height } = imgData;
-    let isDocument = this.themeImageKinds.get(imgData);
+    // Transfer functions vary per graphics state, so only share plain images.
+    const shared =
+      this.current.transferMaps === "none" &&
+      !this.current.transferMapsFallback;
+    let isDocument = shared
+      ? themeImageCache.getKind(imgData)
+      : this.themeImageKinds.get(imgData);
     if (isDocument === undefined) {
       // Read back only a tiny sample for photos, not their full-resolution
       // bitmap. The decode and GPU upload fast paths stay intact.
@@ -4130,20 +4144,43 @@ class CanvasGraphics {
         context.getImageData(0, 0, canvas.width, canvas.height)
       );
       this.canvasFactory.destroy(sample);
-      this.themeImageKinds.set(imgData, isDocument);
-    }
-    if (isDocument) {
-      if (!canvasEntry) {
-        canvasEntry = this.canvasFactory.create(width, height);
-        canvasEntry.context.drawImage(img, 0, 0);
+      if (shared) {
+        themeImageCache.setKind(imgData, isDocument);
+      } else {
+        this.themeImageKinds.set(imgData, isDocument);
       }
-      const ctx = canvasEntry.context;
-      const pixels = ctx.getImageData(0, 0, width, height);
-      transformDocumentImage(pixels);
-      ctx.putImageData(pixels, 0, 0);
-      img = canvasEntry.canvas;
     }
-    // Photographs intentionally retain their original colors and luminance.
+    if (!isDocument) {
+      // Photographs intentionally retain their original colors and luminance,
+      // so they also keep the document's blend mode (swapping it back).
+      this.ctx.globalCompositeOperation = darkBlendMode(
+        this.ctx.globalCompositeOperation
+      );
+      return { img, canvasEntry };
+    }
+    const cached = shared && themeImageCache.get(imgData);
+    if (cached) {
+      if (canvasEntry) {
+        this.canvasFactory.destroy(canvasEntry);
+      }
+      return { img: cached, canvasEntry: null };
+    }
+    if (!canvasEntry) {
+      canvasEntry = this.canvasFactory.create(width, height);
+      canvasEntry.context.drawImage(img, 0, 0);
+    }
+    const ctx = canvasEntry.context;
+    const pixels = ctx.getImageData(0, 0, width, height);
+    transformDocumentImage(pixels);
+    ctx.putImageData(pixels, 0, 0);
+    img = canvasEntry.canvas;
+    // The cache now owns the canvas, so the caller mustn't destroy it.
+    if (
+      shared &&
+      themeImageCache.set(imgData, canvasEntry, this.canvasFactory)
+    ) {
+      canvasEntry = null;
+    }
     return { img, canvasEntry };
   }
 
@@ -4276,6 +4313,7 @@ class CanvasGraphics {
       inlineImgCanvas = tmpCanvas;
     }
 
+    const blendMode = ctx.globalCompositeOperation;
     if (this.isDarkTheme) {
       ({ img: imgToPaint, canvasEntry: inlineImgCanvas } = this.themeImage(
         imgToPaint,
@@ -4304,6 +4342,7 @@ class CanvasGraphics {
       this.dependencyTracker?.recordBBox(opIdx, ctx, 0, 1, -1, 0);
       ctx.restore();
     }
+    ctx.globalCompositeOperation = blendMode;
     if (inlineImgCanvas) {
       this.canvasFactory.destroy(inlineImgCanvas);
     }
